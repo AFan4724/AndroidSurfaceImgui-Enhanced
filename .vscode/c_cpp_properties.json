@@ -1,0 +1,41 @@
+{
+    "configurations": [
+        {
+            "name": "Android NDK",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${env:NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/**",
+                "${workspaceFolder}/jni/include/Android_draw/**",
+                "${workspaceFolder}/jni/include/Android_Graphics/**",
+                "${workspaceFolder}/jni/include/Android_my_imgui/**",
+                "${workspaceFolder}/jni/include/Android_touch/**",
+                "${workspaceFolder}/jni/include/My_Utils/**",
+                "${workspaceFolder}/jni/include/ImGui/**",
+                "${workspaceFolder}/jni/include/ImGui/backends/**",
+                "${workspaceFolder}/jni/include/ImGui/misc/freetype/**",
+                "${workspaceFolder}/jni/include/ImGui/misc/git_freetype/**",
+                "${workspaceFolder}/jni/include/**"
+            ],
+            "defines": [
+                "__ANDROID__",
+                "__ARM_ARCH_8A__",
+                "__aarch64__",
+                "ANDROID_PLATFORM=android-24",
+                "APP_STL=c++_static"
+            ],
+            "compilerPath": "${env:NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang++.cmd",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-arm64",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "${env:NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 4
+} 
