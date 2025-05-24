@@ -10,7 +10,7 @@
 - ✅ **增强的Surface管理**：新增清理Surface函数，确保资源正确释放
 - ✅ **修复重创建问题**：解决了关闭后不能重新创建根Surface的问题
 - ✅ **防录屏功能**：支持防录屏模式切换，保护敏感内容
-- ✅ **广泛系统支持**：支持Android 5.0 - Android 15.0全版本
+- ✅ **广泛系统支持**：支持Android 5.0 - Android 16.0全版本
 - ✅ **NDK构建系统**：使用ndk-build进行编译，简化构建流程
 
 ## 支持的Android版本
@@ -28,6 +28,7 @@
 | Android 13.0 | ✅ 完全支持 | API Level 33 |
 | Android 14.0 | ✅ 完全支持 | API Level 34 |
 | Android 15.0 | ✅ 完全支持 | API Level 35 |
+| Android 16.0 | ✅ 完全支持 | API Level 36 |
 
 ## 环境要求
 
@@ -151,7 +152,6 @@ bool permeate_record = false;  // false = 防录屏，true = 允许录屏
 - ✅ 新增Surface清理函数
 - ✅ 修复重创建Surface问题
 - ✅ 添加防录屏功能
-- ✅ 扩展Android版本支持至15.0
 
 ### v2.0.0
 - 基于原始AndroidSurfaceImgui项目
