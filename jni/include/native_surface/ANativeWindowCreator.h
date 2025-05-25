@@ -803,6 +803,7 @@ namespace android {
         {
             std::string uniqueId;
             uint32_t currentLayerStack;
+            int32_t orientation = 0;
             struct
             {
                 int32_t left;
@@ -811,12 +812,13 @@ namespace android {
                 int32_t bottom;
             } currentLayerStackRect;
 
-            static DumpDisplayInfo MakeFromRawDumpInfo(const std::string_view &uniqueId, const std::string_view &currentLayerStack, const std::string_view &currentLayerStackRect)
+            static DumpDisplayInfo MakeFromRawDumpInfo(const std::string_view &uniqueId, const std::string_view &currentLayerStack, const std::string_view &currentLayerStackRect, const std::string_view &orientation = "")
             {
                 DumpDisplayInfo result;
 
                 result.uniqueId = std::string{uniqueId.begin(), uniqueId.end()};
                 result.currentLayerStack = static_cast<uint32_t>(std::stoul(std::string{currentLayerStack.begin(), currentLayerStack.end()}));
+                result.orientation = orientation.empty() ? 0 : std::stoi(std::string{orientation.begin(), orientation.end()});
 
                 auto leftPos = currentLayerStackRect.find("(") + 1;
                 auto topPos = currentLayerStackRect.find(", ", leftPos);
@@ -858,6 +860,7 @@ namespace android {
                 auto uniqueId = SubStringView(dumpDisplayInfo, "mUniqueId=", "\n", dumpDisplayInfoIt);
                 auto currentLayerStack = SubStringView(dumpDisplayInfo, "mCurrentLayerStack=", "\n", dumpDisplayInfoIt);
                 auto currentLayerStackRect = SubStringView(dumpDisplayInfo, "mCurrentLayerStackRect=", "\n", dumpDisplayInfoIt);
+                auto orientation = SubStringView(dumpDisplayInfo, "mCurrentOrientation=", "\n", dumpDisplayInfoIt);  // 新增获取屏幕方向
 
                 if ("-1" == currentLayerStack)
                 {
@@ -869,7 +872,7 @@ namespace android {
                     continue;
                 }
 
-                result.push_back(DumpDisplayInfo::MakeFromRawDumpInfo(uniqueId, currentLayerStack, currentLayerStackRect));
+                result.push_back(DumpDisplayInfo::MakeFromRawDumpInfo(uniqueId, currentLayerStack, currentLayerStackRect, orientation));
             }
 
             return result;
@@ -1011,8 +1014,13 @@ namespace android {
                 static int32_t builtinDisplayWidth = -1, builtinDisplayHeight = -1;
                 if (0 == displayInfo.currentLayerStack)
                 {
-                    builtinDisplayWidth = displayInfo.currentLayerStackRect.right;
-                    builtinDisplayHeight = displayInfo.currentLayerStackRect.bottom;
+                    if (displayInfo.orientation == 1 || displayInfo.orientation == 3) {
+                        builtinDisplayWidth = displayInfo.currentLayerStackRect.bottom;
+                        builtinDisplayHeight = displayInfo.currentLayerStackRect.right;
+                    } else {
+                        builtinDisplayWidth = displayInfo.currentLayerStackRect.right;
+                        builtinDisplayHeight = displayInfo.currentLayerStackRect.bottom;
+                    }
                 }
 
                 // Process mirror display
