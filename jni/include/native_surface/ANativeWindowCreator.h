@@ -38,6 +38,7 @@
 #include <array>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <climits>
 
@@ -237,6 +238,7 @@ namespace android {
             void *(*SurfaceComposerClient__Transaction__Show)(void *thiz, StrongPointer<void> &surfaceControl) = nullptr;
             void *(*SurfaceComposerClient__Transaction__Hide)(void *thiz, StrongPointer<void> &surfaceControl) = nullptr;
             void *(*SurfaceComposerClient__Transaction__Reparent)(void *thiz, StrongPointer<void> &surfaceControl, StrongPointer<void> &newParentHandle) = nullptr;
+            void *(*SurfaceComposerClient__Transaction__SetMatrix)(void *thiz, StrongPointer<void> &surfaceControl, float dsdx, float dtdx, float dtdy, float dsdy) = nullptr;
             int32_t (*SurfaceComposerClient__Transaction__Apply)(void *thiz, bool synchronous, bool oneWay) = nullptr;
 
             int32_t (*SurfaceControl__Validate)(void *thiz) = nullptr;
@@ -360,6 +362,9 @@ namespace android {
                 if (12 <= systemVersion) {
                     ResolveMethod(SurfaceComposerClient__Transaction, SetTrustedOverlay, libgui, "_ZN7android21SurfaceComposerClient11Transaction17setTrustedOverlayERKNS_2spINS_14SurfaceControlEEEb");
                     ResolveMethod(SurfaceComposerClient__Transaction, Reparent, libgui, "_ZN7android21SurfaceComposerClient11Transaction8reparentERKNS_2spINS_14SurfaceControlEEES6_");
+                }
+                if (9 <= systemVersion) {
+                    ResolveMethod(SurfaceComposerClient__Transaction, SetMatrix, libgui, "_ZN7android21SurfaceComposerClient11Transaction9setMatrixERKNS_2spINS_14SurfaceControlEEEffff");
                 }
                 if (13 <= systemVersion) {
                     ResolveMethod(SurfaceComposerClient__Transaction, SetLayerStack, libgui, "_ZN7android21SurfaceComposerClient11Transaction13setLayerStackERKNS_2spINS_14SurfaceControlEEENS_2ui10LayerStackE");
@@ -539,6 +544,10 @@ namespace android {
 
             void Reparent(StrongPointer<void> &surfaceControl, StrongPointer<void> &newParentHandle) {
                 Functionals::GetInstance().SurfaceComposerClient__Transaction__Reparent(data, surfaceControl, newParentHandle);
+            }
+
+            void *SetMatrix(StrongPointer<void> &surfaceControl, float dsdx, float dtdx, float dtdy, float dsdy) {
+                return Functionals::GetInstance().SurfaceComposerClient__Transaction__SetMatrix(data, surfaceControl, dsdx, dtdx, dtdy, dsdy);
             }
 
             int32_t Apply(bool synchronous, bool oneWay) {
@@ -772,9 +781,60 @@ namespace android {
 
                 return {mirrorSurface.get()};
             }
+
+            void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY) {
+                if (nullptr == surface.data)
+                    return;
+
+                static SurfaceComposerClientTransaction transaction;
+                StrongPointer<void> surfacePtr{surface.data};
+                
+                // Use SetMatrix to apply scaling transformation
+                // SetMatrix parameters: dsdx, dtdx, dtdy, dsdy
+                // For scaling: dsdx=scaleX, dtdx=0, dtdy=0, dsdy=scaleY
+                transaction.SetMatrix(surfacePtr, scaleX, 0.0f, 0.0f, scaleY);
+                transaction.Apply(false, true);
+                
+                SURFACE_LOG_DEBUG("ZoomSurface called with scale: %f, %f", scaleX, scaleY);
+            }
         };
 
-        inline std::vector<std::pair<std::string, std::string>> ParseDisplayInfo(const std::string_view &displayInfo)
+        struct DumpDisplayInfo
+        {
+            std::string uniqueId;
+            uint32_t currentLayerStack;
+            struct
+            {
+                int32_t left;
+                int32_t top;
+                int32_t right;
+                int32_t bottom;
+            } currentLayerStackRect;
+
+            static DumpDisplayInfo MakeFromRawDumpInfo(const std::string_view &uniqueId, const std::string_view &currentLayerStack, const std::string_view &currentLayerStackRect)
+            {
+                DumpDisplayInfo result;
+
+                result.uniqueId = std::string{uniqueId.begin(), uniqueId.end()};
+                result.currentLayerStack = static_cast<uint32_t>(std::stoul(std::string{currentLayerStack.begin(), currentLayerStack.end()}));
+
+                auto leftPos = currentLayerStackRect.find("(") + 1;
+                auto topPos = currentLayerStackRect.find(", ", leftPos);
+                auto rightPos = currentLayerStackRect.find(" - ", topPos + 2);
+                auto bottomPos = currentLayerStackRect.find(", ", rightPos + 3);
+                auto endPos = currentLayerStackRect.find(")", bottomPos + 2);
+
+                // Don't check it, even though it might cause a crash.
+                result.currentLayerStackRect.left = std::stoi(std::string{currentLayerStackRect.begin() + leftPos, currentLayerStackRect.begin() + topPos});
+                result.currentLayerStackRect.top = std::stoi(std::string{currentLayerStackRect.begin() + topPos + 2, currentLayerStackRect.begin() + rightPos});
+                result.currentLayerStackRect.right = std::stoi(std::string{currentLayerStackRect.begin() + rightPos + 3, currentLayerStackRect.begin() + bottomPos});
+                result.currentLayerStackRect.bottom = std::stoi(std::string{currentLayerStackRect.begin() + bottomPos + 2, currentLayerStackRect.begin() + endPos});
+
+                return result;
+            }
+        };
+
+        inline std::vector<DumpDisplayInfo> ParseDumpDisplayInfo(const std::string_view &dumpDisplayInfo)
         {
             constexpr auto SubStringView = [](const std::string_view &str, std::string_view start, std::string_view end, int startOffset = 0) -> std::string_view
             {
@@ -789,24 +849,19 @@ namespace android {
                 return str.substr(startIt + start.size(), endIt - startIt - start.size());
             };
 
-            std::vector<std::pair<std::string, std::string>> result;
-
-            // Check if DisplayDeviceInfo is present
-            if (displayInfo.find("DisplayDeviceInfo") == std::string_view::npos) {
-                return result;
-            }
+            std::vector<DumpDisplayInfo> result;
 
             // DisplayDeviceInfo
-            auto displayInfoIt = std::string_view::npos;
-            int deviceCount = 0;
-            while (std::string_view::npos != (displayInfoIt = displayInfo.find("DisplayDeviceInfo", displayInfoIt + 1)))
+            auto dumpDisplayInfoIt = std::string_view::npos;
+            while (std::string_view::npos != (dumpDisplayInfoIt = dumpDisplayInfo.find("DisplayDeviceInfo", dumpDisplayInfoIt + 1)))
             {
-                deviceCount++;
-                auto uniqueId = SubStringView(displayInfo, "mUniqueId=", "\n", displayInfoIt);
-                auto currentLayerStack = SubStringView(displayInfo, "mCurrentLayerStack=", "\n", displayInfoIt);
+                auto uniqueId = SubStringView(dumpDisplayInfo, "mUniqueId=", "\n", dumpDisplayInfoIt);
+                auto currentLayerStack = SubStringView(dumpDisplayInfo, "mCurrentLayerStack=", "\n", dumpDisplayInfoIt);
+                auto currentLayerStackRect = SubStringView(dumpDisplayInfo, "mCurrentLayerStackRect=", "\n", dumpDisplayInfoIt);
 
                 if ("-1" == currentLayerStack)
                 {
+                    SURFACE_LOG_ERROR("%s -> Current layer stack is -1, skipping", std::string{uniqueId.begin(), uniqueId.end()}.data());
                     continue;
                 }
 
@@ -814,9 +869,22 @@ namespace android {
                     continue;
                 }
 
-                result.emplace_back(std::string{uniqueId.begin(), uniqueId.end()}, std::string{currentLayerStack.begin(), currentLayerStack.end()});
+                result.push_back(DumpDisplayInfo::MakeFromRawDumpInfo(uniqueId, currentLayerStack, currentLayerStackRect));
             }
 
+            return result;
+        }
+
+        // Keep the old function for backward compatibility
+        inline std::vector<std::pair<std::string, std::string>> ParseDisplayInfo(const std::string_view &displayInfo)
+        {
+            auto dumpInfos = ParseDumpDisplayInfo(displayInfo);
+            std::vector<std::pair<std::string, std::string>> result;
+            
+            for (const auto& info : dumpInfos) {
+                result.emplace_back(info.uniqueId, std::to_string(info.currentLayerStack));
+            }
+            
             return result;
         }
     }
@@ -913,52 +981,73 @@ namespace android {
         // Handle multi-display mirroring, this is the key feature for solving permission issues
         static void ProcessMirrorDisplay() {
             static std::chrono::steady_clock::time_point lastTime{};
-            auto currentSystemVersion = detail::Functionals::GetInstance().systemVersion;
-            
-            if (13 > currentSystemVersion) {
-                return;
-            }
-            
-            auto now = std::chrono::steady_clock::now();
-            auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
-            
-            // Limit call frequency, maximum once per second
-            if (now - lastTime < std::chrono::seconds(1)) {
-                return;
-            }
 
-            // Execute "dumpsys display" command to get display information
+            if (13 > detail::Functionals::GetInstance().systemVersion)
+                return;
+            if (std::chrono::steady_clock::now() - lastTime < std::chrono::seconds(1))
+                return;
+
+            // Run "dumpsys display" and get result
             auto pipe = popen("dumpsys display", "r");
-            if (!pipe) {
+            if (!pipe)
+            {
+                SURFACE_LOG_ERROR("Failed to run dumpsys command");
                 return;
             }
 
             char buffer[512]{};
-            std::string result;
+            std::string dumpDisplayResult;
             while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-                result += buffer;
+                dumpDisplayResult += buffer;
             pclose(pipe);
 
-            auto& cachedLayerStackMirrorSurfaces = GetLayerStackMirrorSurfaces();
-            auto displayInfo = detail::ParseDisplayInfo(result);
-            for (auto &[id, layerStack] : displayInfo) {
-                if ("0" == layerStack) {
-                    continue;
-                }
-                
-                if (cachedLayerStackMirrorSurfaces.find(layerStack) != cachedLayerStackMirrorSurfaces.end()) {
-                    continue;
+            static std::unordered_map<uint32_t, detail::SurfaceControl> cachedLayerStackMirrorSurfaces;
+            static std::unordered_set<uint32_t> cachedLayerStackScales;
+
+            auto dumpDisplayInfos = detail::ParseDumpDisplayInfo(dumpDisplayResult);
+            for (auto &displayInfo : dumpDisplayInfos)
+            {
+                // Update multi display layer scale
+                static int32_t builtinDisplayWidth = -1, builtinDisplayHeight = -1;
+                if (0 == displayInfo.currentLayerStack)
+                {
+                    builtinDisplayWidth = displayInfo.currentLayerStackRect.right;
+                    builtinDisplayHeight = displayInfo.currentLayerStackRect.bottom;
                 }
 
-                SURFACE_LOG_TRACE("New display layerstack detected: [%s] -> %s", id.c_str(), layerStack.c_str());
+                // Process mirror display
+                if (0 == displayInfo.currentLayerStack)
+                    continue;
 
-                // Create mirror for each existing Surface (following new code logic)
-                for (auto &[_, surfaceControl] : m_cachedSurfaceControl) {
-                    auto mirrorLayer = GetComposerInstance().MirrorSurface(surfaceControl, std::stoi(layerStack));
-                    if (mirrorLayer.data) {
-                        SURFACE_LOG_INFO("Mirror layer created: %p", mirrorLayer.data);
-                        cachedLayerStackMirrorSurfaces.emplace(std::move(layerStack), std::move(mirrorLayer));
-                        break; // Only create one mirror per layerStack
+                if (cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) == cachedLayerStackMirrorSurfaces.end())
+                {
+                    SURFACE_LOG_INFO("New display layerstack detected: [%s] -> %u", displayInfo.uniqueId.data(), displayInfo.currentLayerStack);
+
+                    for (auto &[_, surfaceControl] : m_cachedSurfaceControl)
+                    {
+                        auto mirrorLayer = GetComposerInstance().MirrorSurface(surfaceControl, displayInfo.currentLayerStack);
+                        if (mirrorLayer.data) {
+                            SURFACE_LOG_INFO("Mirror layer created: %p", mirrorLayer.data);
+                            cachedLayerStackMirrorSurfaces.emplace(displayInfo.currentLayerStack, std::move(mirrorLayer));
+                            break; // Only create one mirror per layerStack
+                        }
+                    }
+                }
+
+                // Handle scaling for different display sizes
+                if (-1 != builtinDisplayWidth && -1 != builtinDisplayHeight && cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) != cachedLayerStackMirrorSurfaces.end())
+                {
+                    if ((displayInfo.currentLayerStackRect.right != builtinDisplayWidth || displayInfo.currentLayerStackRect.bottom != builtinDisplayHeight) && cachedLayerStackScales.find(displayInfo.currentLayerStack) == cachedLayerStackScales.end())
+                    {
+                        auto &mirrorLayer = cachedLayerStackMirrorSurfaces.at(displayInfo.currentLayerStack);
+
+                        float scaleX = static_cast<float>(displayInfo.currentLayerStackRect.right) / builtinDisplayWidth;
+                        float scaleY = static_cast<float>(displayInfo.currentLayerStackRect.bottom) / builtinDisplayHeight;
+                        
+                        GetComposerInstance().ZoomSurface(mirrorLayer, scaleX, scaleY);
+
+                        cachedLayerStackScales.emplace(displayInfo.currentLayerStack);
+                        SURFACE_LOG_INFO("Update mirror layer scale: %p %f %f", mirrorLayer.data, scaleX, scaleY);
                     }
                 }
             }
