@@ -9,7 +9,7 @@ include $(PREBUILT_STATIC_LIBRARY)
 
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := imgui_chain_v2-1.0
+LOCAL_MODULE := AndroidSurfaceImguiEnhanced
 
 LOCAL_CFLAGS := -std=c17
 LOCAL_CFLAGS += -fvisibility=hidden

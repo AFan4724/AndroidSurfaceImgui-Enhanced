@@ -167,6 +167,14 @@ namespace android {
             {
                 uint64_t value;
             };
+
+            struct Rect
+            {
+                int32_t left;
+                int32_t top;
+                int32_t right;
+                int32_t bottom;
+            };
         }
 
         struct String8;
@@ -239,6 +247,7 @@ namespace android {
             void *(*SurfaceComposerClient__Transaction__Hide)(void *thiz, StrongPointer<void> &surfaceControl) = nullptr;
             void *(*SurfaceComposerClient__Transaction__Reparent)(void *thiz, StrongPointer<void> &surfaceControl, StrongPointer<void> &newParentHandle) = nullptr;
             void *(*SurfaceComposerClient__Transaction__SetMatrix)(void *thiz, StrongPointer<void> &surfaceControl, float dsdx, float dtdx, float dtdy, float dsdy) = nullptr;
+            void *(*SurfaceComposerClient__Transaction__SetPosition)(void *thiz, StrongPointer<void> &surfaceControl, float x, float y) = nullptr;
             int32_t (*SurfaceComposerClient__Transaction__Apply)(void *thiz, bool synchronous, bool oneWay) = nullptr;
 
             int32_t (*SurfaceControl__Validate)(void *thiz) = nullptr;
@@ -365,6 +374,9 @@ namespace android {
                 }
                 if (9 <= systemVersion) {
                     ResolveMethod(SurfaceComposerClient__Transaction, SetMatrix, libgui, "_ZN7android21SurfaceComposerClient11Transaction9setMatrixERKNS_2spINS_14SurfaceControlEEEffff");
+                }
+                if (5 <= systemVersion) {
+                    ResolveMethod(SurfaceComposerClient__Transaction, SetPosition, libgui, "_ZN7android21SurfaceComposerClient11Transaction11setPositionERKNS_2spINS_14SurfaceControlEEEff");
                 }
                 if (13 <= systemVersion) {
                     ResolveMethod(SurfaceComposerClient__Transaction, SetLayerStack, libgui, "_ZN7android21SurfaceComposerClient11Transaction13setLayerStackERKNS_2spINS_14SurfaceControlEEENS_2ui10LayerStackE");
@@ -548,6 +560,10 @@ namespace android {
 
             void *SetMatrix(StrongPointer<void> &surfaceControl, float dsdx, float dtdx, float dtdy, float dsdy) {
                 return Functionals::GetInstance().SurfaceComposerClient__Transaction__SetMatrix(data, surfaceControl, dsdx, dtdx, dtdy, dsdy);
+            }
+
+            void SetPosition(StrongPointer<void> &surfaceControl, float x, float y) {
+                Functionals::GetInstance().SurfaceComposerClient__Transaction__SetPosition(data, surfaceControl, x, y);
             }
 
             int32_t Apply(bool synchronous, bool oneWay) {
@@ -749,6 +765,8 @@ namespace android {
                     break;
                 }
 
+                SURFACE_LOG_INFO("Mirror surface size: %d x %d", width, height);
+
                 // Create mirror root surface
                 auto mirrorRootName = "MirrorRoot@" + std::to_string(layerStack);
                 auto mirrorRootSurface = CreateSurface(mirrorRootName.c_str(), width, height, 0x00004000);
@@ -782,7 +800,7 @@ namespace android {
                 return {mirrorSurface.get()};
             }
 
-            void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY) {
+            void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY, uint32_t orientation, std::string type) {
                 if (nullptr == surface.data)
                     return;
 
@@ -792,10 +810,41 @@ namespace android {
                 // Use SetMatrix to apply scaling transformation
                 // SetMatrix parameters: dsdx, dtdx, dtdy, dsdy
                 // For scaling: dsdx=scaleX, dtdx=0, dtdy=0, dsdy=scaleY
-                transaction.SetMatrix(surfacePtr, scaleX, 0.0f, 0.0f, scaleY);
+                if (14 <= Functionals::GetInstance().systemVersion && type == "VIRTUAL") {
+                    float dsdx, dtdx, dtdy, dsdy;
+                    switch (orientation) {
+                        case 0:
+                            dsdx = scaleX;
+                            dtdx = 0.0f;
+                            dtdy = 0.0f;
+                            dsdy = scaleY;
+                            break;
+                        case 1:
+                            dsdx = 0.0f;
+                            dtdx = scaleY;
+                            dtdy = -scaleX;
+                            dsdy = 0.0f;
+                            break;
+                        case 2:
+                            dsdx = -scaleX;
+                            dtdx = 0.0f;
+                            dtdy = 0.0f;
+                            dsdy = -scaleY;
+                            break;
+                        case 3:
+                            dsdx = 0.0f;
+                            dtdx = -scaleY;
+                            dtdy = scaleX;
+                            dsdy = 0.0f;
+                            break;
+                    }
+                    transaction.SetMatrix(surfacePtr, dsdx, dtdx, dtdy, dsdy);
+                    SURFACE_LOG_DEBUG("ZoomSurface called with dsdx: %f, dtdx: %f, dtdy: %f, dsdy: %f", dsdx, dtdx, dtdy, dsdy);
+                } else {
+                    transaction.SetMatrix(surfacePtr, scaleX, 0, 0, scaleY);
+                    SURFACE_LOG_DEBUG("ZoomSurface called with scaleX: %f, scaleY: %f", scaleX, scaleY);
+                }
                 transaction.Apply(false, true);
-                
-                SURFACE_LOG_DEBUG("ZoomSurface called with scale: %f, %f", scaleX, scaleY);
             }
         };
 
@@ -804,6 +853,7 @@ namespace android {
             std::string uniqueId;
             uint32_t currentLayerStack;
             int32_t orientation = 0;
+            std::string type;  // 新增 type 字段
             struct
             {
                 int32_t left;
@@ -812,13 +862,14 @@ namespace android {
                 int32_t bottom;
             } currentLayerStackRect;
 
-            static DumpDisplayInfo MakeFromRawDumpInfo(const std::string_view &uniqueId, const std::string_view &currentLayerStack, const std::string_view &currentLayerStackRect, const std::string_view &orientation = "")
+            static DumpDisplayInfo MakeFromRawDumpInfo(const std::string_view &uniqueId, const std::string_view &currentLayerStack, const std::string_view &currentLayerStackRect, const std::string_view &orientation = "", const std::string_view &type = "")
             {
                 DumpDisplayInfo result;
 
                 result.uniqueId = std::string{uniqueId.begin(), uniqueId.end()};
                 result.currentLayerStack = static_cast<uint32_t>(std::stoul(std::string{currentLayerStack.begin(), currentLayerStack.end()}));
                 result.orientation = orientation.empty() ? 0 : std::stoi(std::string{orientation.begin(), orientation.end()});
+                result.type = std::string{type.begin(), type.end()};  // 设置 type 字段
 
                 auto leftPos = currentLayerStackRect.find("(") + 1;
                 auto topPos = currentLayerStackRect.find(", ", leftPos);
@@ -857,10 +908,12 @@ namespace android {
             auto dumpDisplayInfoIt = std::string_view::npos;
             while (std::string_view::npos != (dumpDisplayInfoIt = dumpDisplayInfo.find("DisplayDeviceInfo", dumpDisplayInfoIt + 1)))
             {
-                auto uniqueId = SubStringView(dumpDisplayInfo, "mUniqueId=", "\n", dumpDisplayInfoIt);
+                // 获取 type 字段
+                auto type = SubStringView(dumpDisplayInfo, "type ", ",", dumpDisplayInfoIt);
+                auto uniqueId = SubStringView(dumpDisplayInfo, "uniqueId=\"", "\"", dumpDisplayInfoIt);
                 auto currentLayerStack = SubStringView(dumpDisplayInfo, "mCurrentLayerStack=", "\n", dumpDisplayInfoIt);
                 auto currentLayerStackRect = SubStringView(dumpDisplayInfo, "mCurrentLayerStackRect=", "\n", dumpDisplayInfoIt);
-                auto orientation = SubStringView(dumpDisplayInfo, "mCurrentOrientation=", "\n", dumpDisplayInfoIt);  // 新增获取屏幕方向
+                auto orientation = SubStringView(dumpDisplayInfo, "mCurrentOrientation=", "\n", dumpDisplayInfoIt);
 
                 if ("-1" == currentLayerStack)
                 {
@@ -872,7 +925,7 @@ namespace android {
                     continue;
                 }
 
-                result.push_back(DumpDisplayInfo::MakeFromRawDumpInfo(uniqueId, currentLayerStack, currentLayerStackRect, orientation));
+                result.push_back(DumpDisplayInfo::MakeFromRawDumpInfo(uniqueId, currentLayerStack, currentLayerStackRect, orientation, type));
             }
 
             return result;
@@ -987,6 +1040,7 @@ namespace android {
 
             if (13 > detail::Functionals::GetInstance().systemVersion)
                 return;
+
             if (std::chrono::steady_clock::now() - lastTime < std::chrono::seconds(1))
                 return;
 
@@ -1006,14 +1060,16 @@ namespace android {
 
             static std::unordered_map<uint32_t, detail::SurfaceControl> cachedLayerStackMirrorSurfaces;
             static std::unordered_set<uint32_t> cachedLayerStackScales;
+            static std::unordered_set<uint32_t> cachedLayerStackPosition;
 
             auto dumpDisplayInfos = detail::ParseDumpDisplayInfo(dumpDisplayResult);
             for (auto &displayInfo : dumpDisplayInfos)
             {
                 // Update multi display layer scale
-                static int32_t builtinDisplayWidth = -1, builtinDisplayHeight = -1;
+                static int32_t builtinDisplayWidth = -1, builtinDisplayHeight = -1, builtinDisplayOrientation = 0;
                 if (0 == displayInfo.currentLayerStack)
                 {
+                    builtinDisplayOrientation = displayInfo.orientation;
                     if (displayInfo.orientation == 1 || displayInfo.orientation == 3) {
                         builtinDisplayWidth = displayInfo.currentLayerStackRect.bottom;
                         builtinDisplayHeight = displayInfo.currentLayerStackRect.right;
@@ -1045,17 +1101,110 @@ namespace android {
                 // Handle scaling for different display sizes
                 if (-1 != builtinDisplayWidth && -1 != builtinDisplayHeight && cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) != cachedLayerStackMirrorSurfaces.end())
                 {
-                    if ((displayInfo.currentLayerStackRect.right != builtinDisplayWidth || displayInfo.currentLayerStackRect.bottom != builtinDisplayHeight) && cachedLayerStackScales.find(displayInfo.currentLayerStack) == cachedLayerStackScales.end())
+                    int32_t surfaceDisplayWidth = -1, surfaceDisplayHeight = -1;
+                    surfaceDisplayWidth = displayInfo.currentLayerStackRect.bottom < displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                    surfaceDisplayHeight = displayInfo.currentLayerStackRect.bottom > displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                    static int32_t lastOrientation = -1;
+                    if (cachedLayerStackScales.find(displayInfo.currentLayerStack) == cachedLayerStackScales.end() || 
+                        lastOrientation != builtinDisplayOrientation)
                     {
                         auto &mirrorLayer = cachedLayerStackMirrorSurfaces.at(displayInfo.currentLayerStack);
 
-                        float scaleX = static_cast<float>(displayInfo.currentLayerStackRect.right) / builtinDisplayWidth;
-                        float scaleY = static_cast<float>(displayInfo.currentLayerStackRect.bottom) / builtinDisplayHeight;
+                        float scaleX = static_cast<float>(surfaceDisplayWidth) / builtinDisplayWidth, scaleY = static_cast<float>(surfaceDisplayHeight) / builtinDisplayHeight;
+                        if (0.0f <= surfaceDisplayHeight - scaleX * builtinDisplayHeight < 10.0f) {
+                            scaleX = scaleY;
+                        } else if (0.0f <= surfaceDisplayWidth - scaleY * builtinDisplayWidth < 10.0f) {
+                            scaleY = scaleX;
+                        }
                         
-                        GetComposerInstance().ZoomSurface(mirrorLayer, scaleX, scaleY);
-
+                        if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
+                            GetComposerInstance().ZoomSurface(mirrorLayer, scaleY, scaleX, builtinDisplayOrientation, displayInfo.type);
+                        } else {
+                            GetComposerInstance().ZoomSurface(mirrorLayer, scaleX, scaleY, builtinDisplayOrientation, displayInfo.type);
+                        }
                         cachedLayerStackScales.emplace(displayInfo.currentLayerStack);
+                        lastOrientation = builtinDisplayOrientation;
                         SURFACE_LOG_INFO("Update mirror layer scale: %p %f %f", mirrorLayer.data, scaleX, scaleY);
+                    }
+                }
+                // Apply transform to all cached surfaces if needed
+                if (cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) != cachedLayerStackMirrorSurfaces.end()) {
+                    auto &mirrorLayer = cachedLayerStackMirrorSurfaces.at(displayInfo.currentLayerStack);
+                    if (mirrorLayer.data) {
+                        // Apply position transform based on orientation
+                        static int32_t lastOrientation = -1;
+                        if (builtinDisplayOrientation != lastOrientation || cachedLayerStackPosition.find(displayInfo.currentLayerStack) == cachedLayerStackPosition.end()) {
+                            static detail::SurfaceComposerClientTransaction transaction;
+                            detail::StrongPointer<void> surfacePtr{mirrorLayer.data};
+                            int32_t surfaceDisplayWidth = -1, surfaceDisplayHeight = -1;
+                            surfaceDisplayWidth = displayInfo.currentLayerStackRect.bottom < displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                            surfaceDisplayHeight = displayInfo.currentLayerStackRect.bottom > displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                            float x = 0, y = 0;
+                            float scaleX = static_cast<float>(surfaceDisplayWidth) / builtinDisplayWidth, scaleY = static_cast<float>(surfaceDisplayHeight) / builtinDisplayHeight;
+                            int index = 0;
+                            if (0.0f <= surfaceDisplayHeight - scaleX * builtinDisplayHeight < 10.0f) {
+                                scaleX = scaleY;
+                                index = 1;
+                            } else if (0.0f <= surfaceDisplayWidth - scaleY * builtinDisplayWidth < 10.0f) {
+                                scaleY = scaleX;
+                                index = 2;
+                            }
+                            if (14 <= detail::Functionals::GetInstance().systemVersion && displayInfo.type == "VIRTUAL") {
+                                switch (builtinDisplayOrientation) {
+                                    case 0: // ROT_0
+                                        if (index == 1) {
+                                            x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                        } else if (index == 2) {
+                                            y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                        }
+                                        break;
+                                    case 1: // ROT_90
+                                        if (index == 1) {
+                                            x = surfaceDisplayWidth - (surfaceDisplayWidth - builtinDisplayWidth * scaleY) / 2;
+                                        } else if (index == 2) {
+                                            y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                        }
+                                        break;
+                                    case 2: // ROT_180
+                                        if (index == 1) {
+                                            x = surfaceDisplayWidth - (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                            y = surfaceDisplayHeight;
+                                        } else if (index == 2) {
+                                            x = surfaceDisplayWidth;
+                                            y = surfaceDisplayHeight - (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                        }
+                                        break;
+                                    case 3: // ROT_270
+                                        if (index == 1) {
+                                            x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                            y = surfaceDisplayHeight;
+                                        } else if (index == 2) {
+                                            y = builtinDisplayHeight - (surfaceDisplayHeight - builtinDisplayHeight * scaleX) / 2;
+                                        }
+                                        break;
+                                }
+                            } else {
+                                if (index == 1) {
+                                    if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
+                                        y = (surfaceDisplayWidth - builtinDisplayWidth * scaleY) / 2;
+                                    } else {
+                                        x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                    }
+                                    SURFACE_LOG_INFO("Update mirror layer position: %p %d %f", mirrorLayer.data, surfaceDisplayWidth, builtinDisplayWidth * scaleX);
+                                } else if (index == 2) {
+                                    if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
+                                        x = (surfaceDisplayHeight - builtinDisplayHeight * scaleX) / 2;
+                                    } else {
+                                        y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                    }
+                                }
+                            }
+                            transaction.SetPosition(surfacePtr, x, y);
+                            transaction.Apply(false, true);
+                            lastOrientation = builtinDisplayOrientation;
+                            cachedLayerStackPosition.emplace(displayInfo.currentLayerStack);
+                            SURFACE_LOG_INFO("Update mirror layer position: %p %f %f", mirrorLayer.data, x, y);
+                        }
                     }
                 }
             }

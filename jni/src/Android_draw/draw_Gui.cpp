@@ -76,7 +76,7 @@ void drawBegin() {
 
         graphics->Shutdown();
         android::ANativeWindowCreator::Destroy(::window);
-        ::window = android::ANativeWindowCreator::Create("test_sysGui", native_window_screen_x, native_window_screen_y, permeate_record);
+        ::window = android::ANativeWindowCreator::Create("AImGui", native_window_screen_x, native_window_screen_y, permeate_record);
         graphics->Init_Render(::window, native_window_screen_x, native_window_screen_y);
         ::init_My_drawdata(); //初始化绘制数据
     } 
@@ -105,7 +105,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
         static int counter = 0;
         static int style_idx = 0;
         static ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
-        ImGui::Begin("搞批(Symbol chain)v2-1.0", main_thread_flag);  // Create a window called "Hello, world!" and append into it.
+        ImGui::Begin("AndroidSurfaceImguiEnhanced", main_thread_flag);  // Create a window called "Hello, world!" and append into it.
         if (::permeate_record_ini) {
             ImGui::SetWindowPos({LastCoordinate.Pos_x, LastCoordinate.Pos_y});
             ImGui::SetWindowSize({LastCoordinate.Size_x, LastCoordinate.Size_y});
