@@ -152,6 +152,9 @@ bool permeate_record = false;  // false = 防录屏，true = 允许录屏
 - ✅ 新增Surface清理函数
 - ✅ 修复重创建Surface问题
 - ✅ 添加防录屏功能
+- ✅ 修复采集卡画面异常
+- ✅ 修复安卓15画面旋转
+- ✅ 修复分辨率偏移问题
 
 ### v2.0.0
 - 基于原始AndroidSurfaceImgui项目
