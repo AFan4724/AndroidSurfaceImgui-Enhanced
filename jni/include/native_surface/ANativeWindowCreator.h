@@ -1190,7 +1190,6 @@ namespace android {
                                     } else {
                                         x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
                                     }
-                                    SURFACE_LOG_INFO("Update mirror layer position: %p %d %f", mirrorLayer.data, surfaceDisplayWidth, builtinDisplayWidth * scaleX);
                                 } else if (index == 2) {
                                     if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
                                         x = (surfaceDisplayHeight - builtinDisplayHeight * scaleX) / 2;
