@@ -1,8 +1,8 @@
 /*
  * MIT License
  *
- * Copyright (c) 2023 Bzi-Han
- * Project: https://github.com/Bzi-Han/AndroidSurfaceImgui
+ * Copyright (c) 2023 AFan4724
+ * Project: https://github.com/AFan4724/AndroidSurfaceImgui-Enhanced
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
