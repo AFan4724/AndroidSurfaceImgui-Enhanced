@@ -145,6 +145,10 @@ bool permeate_record = false;  // false = 防录屏，true = 允许录屏
 - 感谢 [Dear ImGui](https://github.com/ocornut/imgui) 团队提供优秀的GUI库
 - 感谢所有贡献者和测试者
 
+## 赞助
+
+- 感谢 花椒鸡 赞助
+
 ## 更新日志
 
 ### v2.1.0 (当前版本)
