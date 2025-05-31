@@ -680,19 +680,21 @@ namespace android {
             }
 
             bool GetDisplayInfo(ui::DisplayState *displayInfo) {
-                StrongPointer<void> defaultDisplay;
+                static StrongPointer<void> defaultDisplay;
 
-                if (9 >= Functionals::GetInstance().systemVersion) { // Android 9 and below
-                    defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetBuiltInDisplay(ui::DisplayType::DisplayIdMain);
-                } else {
-                    if (14 > Functionals::GetInstance().systemVersion) { // Android 10-13
-                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetInternalDisplayToken();
-                    } else { // Android 14 and above
-                        auto displayIds = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayIds();
-                        if (displayIds.empty())
-                            return false;
+                if (nullptr == defaultDisplay.get()) {
+                    if (9 >= Functionals::GetInstance().systemVersion) { // Android 9 and below
+                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetBuiltInDisplay(ui::DisplayType::DisplayIdMain);
+                    } else {
+                        if (14 > Functionals::GetInstance().systemVersion) { // Android 10-13
+                            defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetInternalDisplayToken();
+                        } else { // Android 14 and above
+                            auto displayIds = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayIds();
+                            if (displayIds.empty())
+                                return false;
 
-                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayToken(displayIds[0]);
+                            defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayToken(displayIds[0]);
+                        }
                     }
                 }
 
