@@ -680,21 +680,19 @@ namespace android {
             }
 
             bool GetDisplayInfo(ui::DisplayState *displayInfo) {
-                static StrongPointer<void> defaultDisplay;
+                StrongPointer<void> defaultDisplay;
 
-                if (nullptr == defaultDisplay.get()) {
-                    if (9 >= Functionals::GetInstance().systemVersion) { // Android 9 and below
-                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetBuiltInDisplay(ui::DisplayType::DisplayIdMain);
-                    } else {
-                        if (14 > Functionals::GetInstance().systemVersion) { // Android 10-13
-                            defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetInternalDisplayToken();
-                        } else { // Android 14 and above
-                            auto displayIds = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayIds();
-                            if (displayIds.empty())
-                                return false;
+                if (9 >= Functionals::GetInstance().systemVersion) { // Android 9 and below
+                    defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetBuiltInDisplay(ui::DisplayType::DisplayIdMain);
+                } else {
+                    if (14 > Functionals::GetInstance().systemVersion) { // Android 10-13
+                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetInternalDisplayToken();
+                    } else { // Android 14 and above
+                        auto displayIds = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayIds();
+                        if (displayIds.empty())
+                            return false;
 
-                            defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayToken(displayIds[0]);
-                        }
+                        defaultDisplay = Functionals::GetInstance().SurfaceComposerClient__GetPhysicalDisplayToken(displayIds[0]);
                     }
                 }
 
@@ -802,7 +800,7 @@ namespace android {
                 return {mirrorSurface.get()};
             }
 
-            void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY, uint32_t orientation, bool offset = false) {
+            void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY, uint32_t orientation, std::string type) {
                 if (nullptr == surface.data)
                     return;
 
@@ -812,7 +810,7 @@ namespace android {
                 // Use SetMatrix to apply scaling transformation
                 // SetMatrix parameters: dsdx, dtdx, dtdy, dsdy
                 // For scaling: dsdx=scaleX, dtdx=0, dtdy=0, dsdy=scaleY
-                if (14 <= Functionals::GetInstance().systemVersion && offset) {
+                if (14 <= Functionals::GetInstance().systemVersion && type == "VIRTUAL") {
                     float dsdx, dtdx, dtdy, dsdy;
                     switch (orientation) {
                         case 0:
@@ -1061,7 +1059,6 @@ namespace android {
             pclose(pipe);
 
             static std::unordered_map<uint32_t, detail::SurfaceControl> cachedLayerStackMirrorSurfaces;
-            static std::unordered_map<uint32_t, bool> cachedLayerStackIsOffset;
             static std::unordered_set<uint32_t> cachedLayerStackScales;
             static std::unordered_set<uint32_t> cachedLayerStackPosition;
 
@@ -1086,28 +1083,6 @@ namespace android {
                 if (0 == displayInfo.currentLayerStack)
                     continue;
 
-                int32_t surfaceDisplayWidth = -1, surfaceDisplayHeight = -1;
-                surfaceDisplayWidth = displayInfo.currentLayerStackRect.bottom < displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
-                surfaceDisplayHeight = displayInfo.currentLayerStackRect.bottom > displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
-
-                bool offset = false;
-                if (cachedLayerStackIsOffset.find(displayInfo.currentLayerStack) == cachedLayerStackIsOffset.end())
-                {
-                    if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3)
-                    {
-                        if (surfaceDisplayHeight == displayInfo.currentLayerStackRect.right)
-                        {
-                            cachedLayerStackIsOffset.emplace(displayInfo.currentLayerStack, false);
-                        } else {
-                            cachedLayerStackIsOffset.emplace(displayInfo.currentLayerStack, true);
-                        }
-                        offset = cachedLayerStackIsOffset[displayInfo.currentLayerStack];
-                    }
-                } else {
-                    offset = cachedLayerStackIsOffset[displayInfo.currentLayerStack];
-                }
-                
-
                 if (cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) == cachedLayerStackMirrorSurfaces.end())
                 {
                     SURFACE_LOG_INFO("New display layerstack detected: [%s] -> %u", displayInfo.uniqueId.data(), displayInfo.currentLayerStack);
@@ -1126,6 +1101,9 @@ namespace android {
                 // Handle scaling for different display sizes
                 if (-1 != builtinDisplayWidth && -1 != builtinDisplayHeight && cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) != cachedLayerStackMirrorSurfaces.end())
                 {
+                    int32_t surfaceDisplayWidth = -1, surfaceDisplayHeight = -1;
+                    surfaceDisplayWidth = displayInfo.currentLayerStackRect.bottom < displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                    surfaceDisplayHeight = displayInfo.currentLayerStackRect.bottom > displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
                     static int32_t lastOrientation = -1;
                     if (cachedLayerStackScales.find(displayInfo.currentLayerStack) == cachedLayerStackScales.end() || 
                         lastOrientation != builtinDisplayOrientation)
@@ -1133,14 +1111,17 @@ namespace android {
                         auto &mirrorLayer = cachedLayerStackMirrorSurfaces.at(displayInfo.currentLayerStack);
 
                         float scaleX = static_cast<float>(surfaceDisplayWidth) / builtinDisplayWidth, scaleY = static_cast<float>(surfaceDisplayHeight) / builtinDisplayHeight;
-                        if (scaleY < scaleX)
-                        {
+                        if (0.0f <= surfaceDisplayHeight - scaleX * builtinDisplayHeight < 10.0f) {
                             scaleX = scaleY;
-                        } else {
+                        } else if (0.0f <= surfaceDisplayWidth - scaleY * builtinDisplayWidth < 10.0f) {
                             scaleY = scaleX;
                         }
                         
-                        GetComposerInstance().ZoomSurface(mirrorLayer, scaleX, scaleY, builtinDisplayOrientation, offset);
+                        if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
+                            GetComposerInstance().ZoomSurface(mirrorLayer, scaleY, scaleX, builtinDisplayOrientation, displayInfo.type);
+                        } else {
+                            GetComposerInstance().ZoomSurface(mirrorLayer, scaleX, scaleY, builtinDisplayOrientation, displayInfo.type);
+                        }
                         cachedLayerStackScales.emplace(displayInfo.currentLayerStack);
                         lastOrientation = builtinDisplayOrientation;
                         SURFACE_LOG_INFO("Update mirror layer scale: %p %f %f", mirrorLayer.data, scaleX, scaleY);
@@ -1155,30 +1136,32 @@ namespace android {
                         if (builtinDisplayOrientation != lastOrientation || cachedLayerStackPosition.find(displayInfo.currentLayerStack) == cachedLayerStackPosition.end()) {
                             static detail::SurfaceComposerClientTransaction transaction;
                             detail::StrongPointer<void> surfacePtr{mirrorLayer.data};
+                            int32_t surfaceDisplayWidth = -1, surfaceDisplayHeight = -1;
+                            surfaceDisplayWidth = displayInfo.currentLayerStackRect.bottom < displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
+                            surfaceDisplayHeight = displayInfo.currentLayerStackRect.bottom > displayInfo.currentLayerStackRect.right ? displayInfo.currentLayerStackRect.bottom : displayInfo.currentLayerStackRect.right;
                             float x = 0, y = 0;
                             float scaleX = static_cast<float>(surfaceDisplayWidth) / builtinDisplayWidth, scaleY = static_cast<float>(surfaceDisplayHeight) / builtinDisplayHeight;
                             int index = 0;
-                            if (scaleX <= scaleY) {
-                                scaleY = scaleX;
-                                index = 1;
-                            } else if (scaleY <= scaleX) {
+                            if (0.0f <= surfaceDisplayHeight - scaleX * builtinDisplayHeight < 10.0f) {
                                 scaleX = scaleY;
+                                index = 1;
+                            } else if (0.0f <= surfaceDisplayWidth - scaleY * builtinDisplayWidth < 10.0f) {
+                                scaleY = scaleX;
                                 index = 2;
                             }
-                            if (14 <= detail::Functionals::GetInstance().systemVersion && offset) {
+                            if (14 <= detail::Functionals::GetInstance().systemVersion && displayInfo.type == "VIRTUAL") {
                                 switch (builtinDisplayOrientation) {
                                     case 0: // ROT_0
                                         if (index == 1) {
-                                            y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
-                                        } else if (index == 2) {
                                             x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                        } else if (index == 2) {
+                                            y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
                                         }
                                         break;
                                     case 1: // ROT_90
                                         if (index == 1) {
                                             x = surfaceDisplayWidth - (surfaceDisplayWidth - builtinDisplayWidth * scaleY) / 2;
                                         } else if (index == 2) {
-                                            x =  surfaceDisplayWidth;
                                             y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
                                         }
                                         break;
@@ -1203,15 +1186,15 @@ namespace android {
                             } else {
                                 if (index == 1) {
                                     if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
-                                        x = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                        y = (surfaceDisplayWidth - builtinDisplayWidth * scaleY) / 2;
                                     } else {
-                                        y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
+                                        x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
                                     }
                                 } else if (index == 2) {
                                     if (builtinDisplayOrientation == 1 || builtinDisplayOrientation == 3) {
-                                        y = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                        x = (surfaceDisplayHeight - builtinDisplayHeight * scaleX) / 2;
                                     } else {
-                                        x = (surfaceDisplayWidth - builtinDisplayWidth * scaleX) / 2;
+                                        y = (surfaceDisplayHeight - builtinDisplayHeight * scaleY) / 2;
                                     }
                                 }
                             }
@@ -1219,7 +1202,7 @@ namespace android {
                             transaction.Apply(false, true);
                             lastOrientation = builtinDisplayOrientation;
                             cachedLayerStackPosition.emplace(displayInfo.currentLayerStack);
-                            SURFACE_LOG_INFO("Update mirror layer position: %d %f %p %f %f", index, scaleX, mirrorLayer.data, x, y);
+                            SURFACE_LOG_INFO("Update mirror layer position: %p %f %f", mirrorLayer.data, x, y);
                         }
                     }
                 }
