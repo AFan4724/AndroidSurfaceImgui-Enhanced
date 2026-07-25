@@ -32,6 +32,7 @@
 #include <sys/system_properties.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -41,6 +42,7 @@
 #include <unordered_set>
 #include <chrono>
 #include <climits>
+#include <mutex>
 
 // Log system configuration
 #ifndef SURFACE_LOG_TAG
@@ -229,6 +231,8 @@ namespace android {
             StrongPointer<void> (*SurfaceComposerClient__CreateSurface_and8)(void *thiz, void *name, uint32_t w, uint32_t h, int32_t format, uint32_t flags, void *parentHandle, uint32_t windowType, uint32_t ownerUid) = nullptr;
             StrongPointer<void> (*SurfaceComposerClient__CreateSurface_and9)(void *thiz, void *name, uint32_t w, uint32_t h, int32_t format, uint32_t flags, void *parentHandle, int32_t windowType, int32_t ownerUid) = nullptr;
             StrongPointer<void> (*SurfaceComposerClient__MirrorSurface)(void *thiz, void *mirrorFromSurface) = nullptr;
+            StrongPointer<void> (*SurfaceComposerClient__MirrorSurfaceWithParent)(
+                void *thiz, void *mirrorFromSurface, void *parentSurface) = nullptr;
             StrongPointer<void> (*SurfaceComposerClient__GetInternalDisplayToken)() = nullptr;
             StrongPointer<void> (*SurfaceComposerClient__GetBuiltInDisplay)(ui::DisplayType type) = nullptr;
             int32_t (*SurfaceComposerClient__GetDisplayState)(StrongPointer<void> &display, ui::DisplayState *displayState) = nullptr;
@@ -322,7 +326,24 @@ namespace android {
                 
                 // MirrorSurface method - Android 11+
                 if (11 <= systemVersion) {
-                    ResolveMethod(SurfaceComposerClient, MirrorSurface, libgui, "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_14SurfaceControlE");
+                    SurfaceComposerClient__MirrorSurface =
+                        reinterpret_cast<decltype(SurfaceComposerClient__MirrorSurface)>(
+                            symbolMethod.Find(
+                                libgui,
+                                "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_14SurfaceControlE"));
+                    if (SurfaceComposerClient__MirrorSurface == nullptr) {
+                        SurfaceComposerClient__MirrorSurfaceWithParent =
+                            reinterpret_cast<decltype(
+                                SurfaceComposerClient__MirrorSurfaceWithParent)>(
+                                symbolMethod.Find(
+                                    libgui,
+                                    "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_14SurfaceControlES2_"));
+                    }
+                    if (SurfaceComposerClient__MirrorSurface == nullptr &&
+                        SurfaceComposerClient__MirrorSurfaceWithParent == nullptr) {
+                        SURFACE_LOG_ERROR(
+                            "Method not found: SurfaceComposerClient::MirrorSurface");
+                    }
                 }
                 
                 // Display related methods - version specific selection
@@ -575,6 +596,59 @@ namespace android {
         };
 
         struct SurfaceComposerClient {
+            struct MirrorSurfaceOwner {
+                uint32_t layerStack = 0;
+                void *mirrorSurface = nullptr;
+                void *mirrorRootSurface = nullptr;
+
+                MirrorSurfaceOwner(uint32_t layerStack_, void *mirrorSurface_, void *mirrorRootSurface_)
+                    : layerStack(layerStack_),
+                      mirrorSurface(mirrorSurface_),
+                      mirrorRootSurface(mirrorRootSurface_) {}
+
+                MirrorSurfaceOwner(const MirrorSurfaceOwner &) = delete;
+                MirrorSurfaceOwner &operator=(const MirrorSurfaceOwner &) = delete;
+
+                MirrorSurfaceOwner(MirrorSurfaceOwner &&other) noexcept
+                    : layerStack(other.layerStack),
+                      mirrorSurface(other.mirrorSurface),
+                      mirrorRootSurface(other.mirrorRootSurface) {
+                    other.mirrorSurface = nullptr;
+                    other.mirrorRootSurface = nullptr;
+                }
+
+                MirrorSurfaceOwner &operator=(MirrorSurfaceOwner &&other) noexcept {
+                    if (this == &other) {
+                        return *this;
+                    }
+                    Release();
+                    layerStack = other.layerStack;
+                    mirrorSurface = other.mirrorSurface;
+                    mirrorRootSurface = other.mirrorRootSurface;
+                    other.mirrorSurface = nullptr;
+                    other.mirrorRootSurface = nullptr;
+                    return *this;
+                }
+
+                ~MirrorSurfaceOwner() {
+                    Release();
+                }
+
+            private:
+                void Release() {
+                    if (mirrorSurface != nullptr) {
+                        Functionals::GetInstance().SurfaceControl__DisConnect(mirrorSurface);
+                        Functionals::GetInstance().RefBase__DecStrong(mirrorSurface, nullptr);
+                        mirrorSurface = nullptr;
+                    }
+                    if (mirrorRootSurface != nullptr) {
+                        Functionals::GetInstance().SurfaceControl__DisConnect(mirrorRootSurface);
+                        Functionals::GetInstance().RefBase__DecStrong(mirrorRootSurface, nullptr);
+                        mirrorRootSurface = nullptr;
+                    }
+                }
+            };
+
             char data[1024];
 
             SurfaceComposerClient() {
@@ -725,32 +799,29 @@ namespace android {
             }
 
             SurfaceControl MirrorSurface(SurfaceControl &surface, uint32_t layerStack) {
-                using mirror_surfaces_t = std::pair<void *, void *>;
-                constexpr auto MirrorSurfacesDeleter = [](mirror_surfaces_t *pair) {
-                    SurfaceControl fakeSurface;
-
-                    // Clean up mirror surface
-                    if (pair->first) {
-                        Functionals::GetInstance().SurfaceControl__DisConnect(pair->first);
-                        Functionals::GetInstance().RefBase__DecStrong(pair->first, fakeSurface.data);
-                    }
-
-                    // Clean up mirror root surface
-                    if (pair->second) {
-                        Functionals::GetInstance().SurfaceControl__DisConnect(pair->second);
-                        Functionals::GetInstance().RefBase__DecStrong(pair->second, fakeSurface.data);
-                    }
-
-                    delete pair;
-                };
-
-                using mirror_surfaces_proxy_t = std::unique_ptr<mirror_surfaces_t, decltype(MirrorSurfacesDeleter)>;
-
-                if (13 > Functionals::GetInstance().systemVersion) {
+                const auto &functionals = Functionals::GetInstance();
+                if (13 > functionals.systemVersion || surface.data == nullptr ||
+                    (functionals.SurfaceComposerClient__MirrorSurface == nullptr &&
+                     functionals.SurfaceComposerClient__MirrorSurfaceWithParent == nullptr) ||
+                    functionals.SurfaceComposerClient__CreateSurface == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__Constructor == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__SetLayer == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__SetLayerStack == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__Show == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__Reparent == nullptr ||
+                    functionals.SurfaceComposerClient__Transaction__Apply == nullptr) {
                     return {};
                 }
 
-                auto mirrorSurface = Functionals::GetInstance().SurfaceComposerClient__MirrorSurface(data, surface.data);
+                StrongPointer<void> mirrorSurface{};
+                if (functionals.SurfaceComposerClient__MirrorSurface != nullptr) {
+                    mirrorSurface =
+                        functionals.SurfaceComposerClient__MirrorSurface(data, surface.data);
+                } else {
+                    mirrorSurface =
+                        functionals.SurfaceComposerClient__MirrorSurfaceWithParent(
+                            data, surface.data, nullptr);
+                }
                 if (nullptr == mirrorSurface.get()) {
                     return {};
                 }
@@ -778,7 +849,6 @@ namespace android {
 
                 // Set mirror root surface properties
                 static SurfaceComposerClientTransaction transaction;
-                static std::vector<mirror_surfaces_proxy_t> mirrorSurfaces;
                 
                 StrongPointer<void> mirrorRootPtr{mirrorRootSurface.data};
                 StrongPointer<void> mirrorPtr{mirrorSurface.get()};
@@ -793,14 +863,33 @@ namespace android {
                 transaction.Reparent(mirrorPtr, mirrorRootPtr);
                 transaction.Apply(false, true);
 
-                // Add mirror surface pair to management container for proper cleanup
-                mirrorSurfaces.emplace_back(
-                    new mirror_surfaces_t{mirrorSurface.get(), mirrorRootSurface.data}, 
-                    MirrorSurfacesDeleter
-                );
+                GetMirrorSurfaceOwners().emplace_back(
+                    layerStack, mirrorSurface.get(), mirrorRootSurface.data);
 
                 return {mirrorSurface.get()};
             }
+
+            void ClearMirrorSurfaces() {
+                GetMirrorSurfaceOwners().clear();
+            }
+
+            void ClearMirrorSurface(uint32_t layerStack) {
+                auto &mirrorSurfaces = GetMirrorSurfaceOwners();
+                for (auto it = mirrorSurfaces.begin(); it != mirrorSurfaces.end(); ++it) {
+                    if (it->layerStack == layerStack) {
+                        mirrorSurfaces.erase(it);
+                        return;
+                    }
+                }
+            }
+
+        private:
+            static std::vector<MirrorSurfaceOwner> &GetMirrorSurfaceOwners() {
+                static std::vector<MirrorSurfaceOwner> mirrorSurfaces;
+                return mirrorSurfaces;
+            }
+
+        public:
 
             void ZoomSurface(SurfaceControl &surface, float scaleX, float scaleY, uint32_t orientation, bool offset = false) {
                 if (nullptr == surface.data)
@@ -984,6 +1073,7 @@ namespace android {
         }
 
         static ANativeWindow *Create(const char *name, int32_t width = -1, int32_t height = -1, bool skipScrenshot_ = false) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             auto &surfaceComposerClient = GetComposerInstance();
             
             // Auto-retrieve display dimensions
@@ -1019,6 +1109,7 @@ namespace android {
         }
 
         static void Destroy(ANativeWindow *nativeWindow) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             auto it = m_cachedSurfaceControl.find(nativeWindow);
             if (it == m_cachedSurfaceControl.end())
                 return;
@@ -1026,7 +1117,7 @@ namespace android {
             SURFACE_LOG_INFO("Destroying ANativeWindow: %p", nativeWindow);
             
             // Destroy main Surface
-            m_cachedSurfaceControl[nativeWindow].DestroySurface(reinterpret_cast<detail::Surface *>(nativeWindow));
+            it->second.DestroySurface(reinterpret_cast<detail::Surface *>(nativeWindow));
             m_cachedSurfaceControl.erase(nativeWindow);
             
             // If this is the last Surface, clear all mirror surfaces
@@ -1037,13 +1128,30 @@ namespace android {
         }
 
         // Handle multi-display mirroring, this is the key feature for solving permission issues
-        static void ProcessMirrorDisplay() {
-            static std::chrono::steady_clock::time_point lastTime{};
+        static void ProcessMirrorDisplay(bool forceRun = false) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
+            auto &lastTime = GetProcessMirrorLastTime();
+            auto &cachedLayerStackMirrorSurfaces = GetProcessLayerStackMirrorSurfaces();
+            auto &cachedLayerStackIsOffset = GetProcessLayerStackIsOffset();
+            auto &cachedLayerStackScales = GetProcessLayerStackScales();
+            auto &cachedLayerStackPosition = GetProcessLayerStackPosition();
 
-            if (13 > detail::Functionals::GetInstance().systemVersion)
+            const auto &functionals = detail::Functionals::GetInstance();
+            if (13 > functionals.systemVersion ||
+                (functionals.SurfaceComposerClient__MirrorSurface == nullptr &&
+                 functionals.SurfaceComposerClient__MirrorSurfaceWithParent == nullptr) ||
+                functionals.SurfaceComposerClient__Transaction__Constructor == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__SetLayerStack == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__SetLayer == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__Show == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__Reparent == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__SetMatrix == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__SetPosition == nullptr ||
+                functionals.SurfaceComposerClient__Transaction__Apply == nullptr)
                 return;
 
-            if (std::chrono::steady_clock::now() - lastTime < std::chrono::seconds(1))
+            if (!forceRun && std::chrono::steady_clock::now() - lastTime <
+                                 std::chrono::seconds(1))
                 return;
 
             // Run "dumpsys display" and get result
@@ -1059,11 +1167,6 @@ namespace android {
             while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
                 dumpDisplayResult += buffer;
             pclose(pipe);
-
-            static std::unordered_map<uint32_t, detail::SurfaceControl> cachedLayerStackMirrorSurfaces;
-            static std::unordered_map<uint32_t, bool> cachedLayerStackIsOffset;
-            static std::unordered_set<uint32_t> cachedLayerStackScales;
-            static std::unordered_set<uint32_t> cachedLayerStackPosition;
 
             auto dumpDisplayInfos = detail::ParseDumpDisplayInfo(dumpDisplayResult);
             for (auto &displayInfo : dumpDisplayInfos)
@@ -1124,7 +1227,10 @@ namespace android {
                 }
 
                 // Handle scaling for different display sizes
-                if (-1 != builtinDisplayWidth && -1 != builtinDisplayHeight && cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) != cachedLayerStackMirrorSurfaces.end())
+                if (builtinDisplayWidth > 0 && builtinDisplayHeight > 0 &&
+                    surfaceDisplayWidth > 0 && surfaceDisplayHeight > 0 &&
+                    cachedLayerStackMirrorSurfaces.find(displayInfo.currentLayerStack) !=
+                        cachedLayerStackMirrorSurfaces.end())
                 {
                     static int32_t lastOrientation = -1;
                     if (cachedLayerStackScales.find(displayInfo.currentLayerStack) == cachedLayerStackScales.end() || 
@@ -1230,13 +1336,14 @@ namespace android {
 
         // Enable automatic mirror display handling (recommended to call periodically in main loop)
         static void EnableAutoMirrorDisplay(bool enable = true) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             static bool autoMirrorEnabled = false;
             SURFACE_LOG_INFO("EnableAutoMirrorDisplay called with enable=%s", enable ? "true" : "false");
             autoMirrorEnabled = enable;
             
             if (enable) {
                 SURFACE_LOG_INFO("Auto mirror display enabled, calling ProcessMirrorDisplay immediately");
-                ProcessMirrorDisplay(); // Execute immediately once
+                ProcessMirrorDisplay(true); // Execute immediately once
             } else {
                 SURFACE_LOG_INFO("Auto mirror display disabled");
             }
@@ -1244,14 +1351,17 @@ namespace android {
 
         // Get current cached Surface count
         static size_t GetCachedSurfaceCount() {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             return m_cachedSurfaceControl.size();
         }
 
         // Clear all mirror surfaces
         static void ClearAllMirrorSurfaces() {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             SURFACE_LOG_INFO("Clearing all mirror surfaces...");
             
-            // Clear cached mirrors from ProcessMirrorDisplay
+            ClearProcessMirrorCaches();
+            GetComposerInstance().ClearMirrorSurfaces();
             ClearLayerStackMirrorSurfaces();
             
             SURFACE_LOG_INFO("All mirror surfaces cleared");
@@ -1259,6 +1369,7 @@ namespace android {
 
         // Clear mirror surface for specific LayerStack
         static void ClearMirrorSurfaceForLayerStack(const std::string& layerStack) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             SURFACE_LOG_INFO("Clearing mirror surface for layerStack: %s", layerStack.c_str());
             
             auto& cachedMirrors = GetLayerStackMirrorSurfaces();
@@ -1268,21 +1379,53 @@ namespace android {
                 cachedMirrors.erase(it);
                 SURFACE_LOG_INFO("Mirror surface for layerStack %s cleared", layerStack.c_str());
             }
+
+            char *endPtr = nullptr;
+            const unsigned long parsed = std::strtoul(layerStack.c_str(), &endPtr, 10);
+            if (endPtr == layerStack.c_str() || *endPtr != '\0' || parsed > UINT32_MAX) {
+                return;
+            }
+            const uint32_t layerStackId = static_cast<uint32_t>(parsed);
+            auto &runtimeMirrors = GetProcessLayerStackMirrorSurfaces();
+            auto runtimeIt = runtimeMirrors.find(layerStackId);
+            if (runtimeIt == runtimeMirrors.end()) {
+                return;
+            }
+            runtimeMirrors.erase(runtimeIt);
+            GetComposerInstance().ClearMirrorSurface(layerStackId);
+            GetProcessLayerStackIsOffset().erase(layerStackId);
+            GetProcessLayerStackScales().erase(layerStackId);
+            GetProcessLayerStackPosition().erase(layerStackId);
         }
 
         // Get current mirror surface count
         static size_t GetMirrorSurfaceCount() {
-            return GetLayerStackMirrorSurfaces().size();
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
+            size_t totalCount = GetLayerStackMirrorSurfaces().size();
+            totalCount += GetProcessLayerStackMirrorSurfaces().size();
+            return totalCount;
         }
 
         // Check if mirror exists for specific LayerStack
         static bool HasMirrorForLayerStack(const std::string& layerStack) {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             auto& cachedMirrors = GetLayerStackMirrorSurfaces();
-            return cachedMirrors.find(layerStack) != cachedMirrors.end();
+            if (cachedMirrors.find(layerStack) != cachedMirrors.end()) {
+                return true;
+            }
+            char *endPtr = nullptr;
+            const unsigned long parsed = std::strtoul(layerStack.c_str(), &endPtr, 10);
+            if (endPtr == layerStack.c_str() || *endPtr != '\0' || parsed > UINT32_MAX) {
+                return false;
+            }
+            const uint32_t layerStackId = static_cast<uint32_t>(parsed);
+            auto &runtimeMirrors = GetProcessLayerStackMirrorSurfaces();
+            return runtimeMirrors.find(layerStackId) != runtimeMirrors.end();
         }
 
         // Complete cleanup when application exits
         static void Cleanup() {
+            std::lock_guard<std::recursive_mutex> stateLock(GetSurfaceStateMutex());
             SURFACE_LOG_INFO("Performing complete cleanup...");
             
             // Clean up all main surfaces
@@ -1300,6 +1443,48 @@ namespace android {
 
     private:
         inline static std::unordered_map<ANativeWindow *, detail::SurfaceControl> m_cachedSurfaceControl;
+
+        static std::recursive_mutex &GetSurfaceStateMutex() {
+            static std::recursive_mutex surfaceStateMutex;
+            return surfaceStateMutex;
+        }
+
+        static std::chrono::steady_clock::time_point &GetProcessMirrorLastTime() {
+            static std::chrono::steady_clock::time_point lastTime{};
+            return lastTime;
+        }
+
+        static std::unordered_map<uint32_t, detail::SurfaceControl> &GetProcessLayerStackMirrorSurfaces() {
+            static std::unordered_map<uint32_t, detail::SurfaceControl> cachedLayerStackMirrorSurfaces;
+            return cachedLayerStackMirrorSurfaces;
+        }
+
+        static std::unordered_map<uint32_t, bool> &GetProcessLayerStackIsOffset() {
+            static std::unordered_map<uint32_t, bool> cachedLayerStackIsOffset;
+            return cachedLayerStackIsOffset;
+        }
+
+        static std::unordered_set<uint32_t> &GetProcessLayerStackScales() {
+            static std::unordered_set<uint32_t> cachedLayerStackScales;
+            return cachedLayerStackScales;
+        }
+
+        static std::unordered_set<uint32_t> &GetProcessLayerStackPosition() {
+            static std::unordered_set<uint32_t> cachedLayerStackPosition;
+            return cachedLayerStackPosition;
+        }
+
+        static void ClearProcessMirrorCaches() {
+            auto &cachedMirrors = GetProcessLayerStackMirrorSurfaces();
+            auto &cachedOffset = GetProcessLayerStackIsOffset();
+            auto &cachedScales = GetProcessLayerStackScales();
+            auto &cachedPosition = GetProcessLayerStackPosition();
+            cachedMirrors.clear();
+            cachedOffset.clear();
+            cachedScales.clear();
+            cachedPosition.clear();
+            GetProcessMirrorLastTime() = std::chrono::steady_clock::time_point{};
+        }
 
         // Get reference to LayerStack mirror surface cache
         static std::unordered_map<std::string, detail::SurfaceControl>& GetLayerStackMirrorSurfaces() {

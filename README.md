@@ -151,7 +151,14 @@ bool permeate_record = false;  // false = 防录屏，true = 允许录屏
 
 ## 更新日志
 
-### v2.1.0 (当前版本)
+### v2.1.1 (当前版本)
+- ✅ 兼容 Android 16 的 `SurfaceComposerClient::mirrorSurface` 新符号签名
+- ✅ 镜像 Surface 按 LayerStack 正确释放，避免清理后遗留引用
+- ✅ 缓存显示令牌，避免频繁查询显示信息时持续增加强引用
+- ✅ 修复创建 Surface 时高度误用长边导致的横屏尺寸与触摸坐标异常
+- ✅ 增加镜像创建、销毁和缓存访问的互斥保护
+
+### v2.1.0
 - ✅ 升级到C++17标准
 - ✅ 新增Surface清理函数
 - ✅ 修复重创建Surface问题
@@ -167,4 +174,4 @@ bool permeate_record = false;  // false = 防录屏，true = 允许录屏
 
 ---
 
-**注意**: 本项目需要系统级权限才能正常运行，请确保在具有适当权限的环境中使用。 
+**注意**: 本项目需要系统级权限才能正常运行，请确保在具有适当权限的环境中使用。
